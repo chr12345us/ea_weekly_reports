@@ -10,6 +10,7 @@ config_files/customers_dist.json
 text_files/frontpage_en.txt
 text_files/ipToName_dist.txt
 config_files/customers.json
+config_files/weekly_config.json
 text_files/ipToName.txt
 *.bak
 script_files/config.py
@@ -19,7 +20,6 @@ script_files/__pycache__
 script_files/AbuseIPDB/Raw Data
 Container/
 output.pdf
-config_files/customers_bak.json
 json_files/MonthlyReport_EA.json
 fil-result/
 tmp_files/

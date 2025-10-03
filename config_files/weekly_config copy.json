@@ -1,0 +1,46 @@
+{
+    "_comment_weekly_reports": "Configuration for weekly attack reports generation",
+    "weekly_reports": {
+        "CUST_ID": "EA",
+        "WEEK_END_DAY": 6,
+        "WEEKS_NO": 6,
+        "_comment": "WEEK_END_DAY: 0=Monday, 1=Tuesday, 2=Wednesday, 3=Thursday, 4=Friday, 5=Saturday, 6=Sunday"
+    },
+
+    "_comment_email": "Configuration for email functionality",
+    "email": {
+        "smtp_host": "smtp.gmail.com",
+        "smtp_port": 587,
+        "email_user": "chr12345us@gmail.com",
+        "email_pass": "zadoaromsythnofx",
+        "from_email": "chr12345us@gmail.com",
+        "to_emails": [
+            "chr12345us@hotmail.com",
+            "cristianh@radware.com"
+        ],
+        "subject_template": "Weekly Attack Trends Report - {customer_id} - Week Ending {week_end_date}",
+        "send_email": true,
+        "use_authentication": true,
+        "use_tls": true,
+        "_comment": "Set send_email to false to disable email sending. use_authentication controls SMTP login. use_tls controls TLS/STARTTLS support."
+    },
+
+    "_comment_future_scripts": "Reserved sections for future script configurations",
+    "daily_reports": {
+        "_comment": "Configuration for daily reports (not yet implemented)",
+        "placeholder": "Future daily report settings will go here"
+    },
+
+    "monthly_reports": {
+        "_comment": "Configuration for monthly reports (not yet implemented)",
+        "placeholder": "Future monthly report settings will go here"
+    },
+
+    "_comment_global": "Global settings that apply to multiple scripts",
+    "global": {
+        "timezone": "UTC",
+        "date_format": "%Y-%m-%d",
+        "datetime_format": "%Y-%m-%d %H:%M:%S",
+        "log_level": "INFO"
+    }
+}
