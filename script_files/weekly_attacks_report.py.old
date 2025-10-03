@@ -1,0 +1,463 @@
+import os
+import sqlite3
+import pandas as pd
+import logging
+import json
+import time
+from datetime import datetime, timedelta
+from typing import List, Tuple, Optional, Dict, Any
+
+# --- CONFIGURATION ---
+TABLE_NAME = 'attacks'
+DATE_COLUMN = 'startDate'
+WEEK_END_DAY = 6  # 0=Monday, 6=Sunday; 4=Friday
+NUM_WEEKS = 8
+DB_DIR = os.path.join(os.path.dirname(__file__), '../database_files/EA')
+REPORT_DIR = os.path.join(os.path.dirname(__file__), '../report_files/EA')
+OUTPUT_CSV = os.path.join(REPORT_DIR, 'weekly_attacks_report.csv')
+OUTPUT_DAILY_CSV = os.path.join(REPORT_DIR, 'daily_attacks_report.csv')
+OUTPUT_HTML = os.path.join(REPORT_DIR, 'weekly_attacks_report.html')
+
+# Date override for testing (uncomment to use)
+# now = datetime(cur_year, cur_month, cur_day, 12, 0, 0)
+now = datetime.now()
+cur_year, cur_month, cur_day = now.year, now.month, now.day
+#cur_year, cur_month, cur_day = 2025, 9, 15 # Test with a date that has data
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(os.path.join(REPORT_DIR, 'weekly_report.log')),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+def validate_config() -> None:
+    """Validate configuration parameters."""
+    if not (0 <= WEEK_END_DAY <= 6):
+        raise ValueError(f"WEEK_END_DAY must be between 0-6, got {WEEK_END_DAY}")
+    
+    if NUM_WEEKS <= 0:
+        raise ValueError(f"NUM_WEEKS must be positive, got {NUM_WEEKS}")
+    
+    # Ensure directories exist
+    os.makedirs(DB_DIR, exist_ok=True)
+    os.makedirs(REPORT_DIR, exist_ok=True)
+    
+    logger.info("Configuration validated successfully")
+
+def get_week_end(dt: datetime) -> datetime:
+    """Get the end of the most recent completed week for a given datetime based on configuration."""
+    days_to_end = (WEEK_END_DAY - dt.weekday()) % 7
+    week_end = dt + timedelta(days=days_to_end)
+    week_end = week_end.replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    # If the calculated week end is in the future, use the previous week end
+    # This ensures we only report on completed weeks
+    if week_end > dt.replace(hour=0, minute=0, second=0, microsecond=0):
+        week_end -= timedelta(days=7)
+    
+    return week_end
+
+
+def get_week_start(week_end: datetime) -> datetime:
+    """Get the start of the week from the week end datetime."""
+    # Week start is 6 days before the week end (so week end is included in the week)
+    week_start = week_end - timedelta(days=6)
+    return week_start
+
+
+def find_db_files() -> List[str]:
+    """Find all relevant database files for analysis."""
+    files = []
+    try:
+        for fname in os.listdir(DB_DIR):
+            if fname.startswith('database_EA_') and fname.endswith('.sqlite'):
+                files.append(os.path.join(DB_DIR, fname))
+        logger.info(f"Found {len(files)} database files")
+        return sorted(files)
+    except OSError as e:
+        logger.error(f"Error accessing database directory {DB_DIR}: {e}")
+        return []
+
+
+def process_database(db_file: str, date_start: Optional[datetime] = None, 
+                    date_end: Optional[datetime] = None) -> Optional[pd.DataFrame]:
+    """
+    Process a single database file and return attack data.
+    
+    Args:
+        db_file: Path to the SQLite database file
+        date_start: Optional start date filter
+        date_end: Optional end date filter
+    
+    Returns:
+        DataFrame with attack data or None if processing failed
+    """
+    logger.info(f"Processing {db_file}")
+    
+    if not os.path.exists(db_file):
+        logger.warning(f"Database file not found: {db_file}")
+        return None
+    
+    try:
+        # Set timeout for database connection to handle locks
+        conn = sqlite3.connect(db_file, timeout=30.0)
+        conn.execute('PRAGMA busy_timeout = 30000')  # 30 seconds timeout
+        
+        # Check if attacks table exists
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (TABLE_NAME,))
+        if not cursor.fetchone():
+            logger.warning(f'Table "{TABLE_NAME}" not found in {db_file}')
+            return None
+        
+        # Build query - get all data first, then filter in pandas for date-only comparison
+        base_query = f'SELECT * FROM {TABLE_NAME}'
+        df = pd.read_sql_query(base_query, conn)
+        
+        if df.empty:
+            logger.warning(f'No data in table "{TABLE_NAME}" in {db_file}')
+            return None
+        
+        if DATE_COLUMN not in df.columns:
+            logger.warning(f'Column "{DATE_COLUMN}" not found in table "{TABLE_NAME}" in {db_file}')
+            return None
+        
+        # Parse date column to datetime and extract date part
+        df[DATE_COLUMN] = pd.to_datetime(df[DATE_COLUMN], errors='coerce')
+        df = df.dropna(subset=[DATE_COLUMN])
+        
+        # Extract just the date part (no time)
+        df['date_only'] = df[DATE_COLUMN].dt.date
+        
+        # Apply date filtering if specified
+        if date_start and date_end:
+            start_date = date_start.date()
+            end_date = date_end.date()
+            mask = (df['date_only'] >= start_date) & (df['date_only'] <= end_date)
+            df = df[mask]
+        
+        if df.empty:
+            logger.warning(f'No valid dates in column "{DATE_COLUMN}" in {db_file} after filtering')
+            return None
+        
+        logger.info(f"Successfully processed {len(df)} records from {db_file}")
+        # Return the full dataframe to preserve all attack records for counting
+        return df
+        
+    except sqlite3.Error as e:
+        logger.error(f'Database error in {db_file}: {e}')
+        return None
+    except Exception as e:
+        logger.error(f'Unexpected error processing {db_file}: {e}')
+        return None
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+
+def get_relevant_db_files_for_period(start_date: datetime, end_date: datetime) -> List[str]:
+    """Get database files relevant for a specific time period."""
+    months_in_period = set()
+    dt_iter = start_date
+    while dt_iter < end_date:
+        months_in_period.add((dt_iter.year, dt_iter.month))
+        dt_iter += timedelta(days=1)
+    
+    def db_file_for(year: int, month: int) -> str:
+        return os.path.join(DB_DIR, f"database_EA_{month:02d}_{year}.sqlite")
+    
+    relevant_files = [
+        db_file_for(y, m) for (y, m) in months_in_period 
+        if os.path.exists(db_file_for(y, m))
+    ]
+    
+    logger.info(f"Found {len(relevant_files)} relevant database files for period {start_date} to {end_date}")
+    return relevant_files
+
+def generate_weekly_report(use_cache: bool = True) -> pd.DataFrame:
+    """
+    Generate weekly attack counts report.
+    
+    Args:
+        use_cache: Whether to use cached CSV if available
+    
+    Returns:
+        DataFrame with weekly attack counts
+    """
+    if use_cache and os.path.exists(OUTPUT_CSV):
+        logger.info("Using cached weekly report CSV")
+        weekly_counts = pd.read_csv(OUTPUT_CSV)
+        
+        # Validate CSV format
+        if 'week_end' not in weekly_counts.columns:
+            if 'year' in weekly_counts.columns and 'week' in weekly_counts.columns:
+                logger.info("Reconstructing week_end from ISO year and week")
+                def iso_to_week_end(row):
+                    d = datetime.strptime(f"{int(row['year'])}-W{int(row['week']):02d}-1", "%G-W%V-%u")
+                    days_to_end = (WEEK_END_DAY - 0) % 7
+                    week_end = d + timedelta(days=days_to_end)
+                    week_end = week_end.replace(hour=0, minute=0, second=0, microsecond=0)
+                    return week_end
+                weekly_counts['week_end'] = weekly_counts.apply(iso_to_week_end, axis=1)
+                weekly_counts = weekly_counts[['week_end', 'attacks']]
+            else:
+                logger.warning("Weekly CSV format is invalid, regenerating...")
+                use_cache = False
+    
+    if not use_cache or not os.path.exists(OUTPUT_CSV):
+        logger.info("Regenerating weekly report from database files")
+        weekly_counts = _regenerate_weekly_counts()
+    
+    return weekly_counts
+
+
+def _regenerate_weekly_counts() -> pd.DataFrame:
+    """Regenerate weekly counts from database files."""
+    files = find_db_files()
+    if not files:
+        logger.error("No database files found for weekly report generation")
+        raise FileNotFoundError("No database files found")
+    
+    all_attacks = []
+    for db_file in files:
+        df = process_database(db_file)
+        if df is not None:
+            all_attacks.append(df)
+    
+    if not all_attacks:
+        logger.error('No attack data found in any database files')
+        raise ValueError('No attack data found')
+    
+    # Combine all attacks
+    attacks_df = pd.concat(all_attacks, ignore_index=True)
+    
+    # Use date_only if available, otherwise create it from startDate
+    if 'date_only' not in attacks_df.columns:
+        attacks_df['startDate'] = pd.to_datetime(attacks_df['startDate'])
+        attacks_df['date_only'] = attacks_df['startDate'].dt.date
+    
+    # Apply week window logic using startDate (we need the full datetime for week calculation)
+    if 'startDate' not in attacks_df.columns:
+        # Reconstruct startDate from date_only for week calculation
+        attacks_df['startDate'] = pd.to_datetime(attacks_df['date_only'])
+    
+    attacks_df['week_end'] = attacks_df['startDate'].apply(get_week_end)
+    
+    # Calculate the current week end based on the forced date to ensure consistency
+    now_dt = datetime(cur_year, cur_month, cur_day, now.hour, now.minute, now.second)
+    current_week_end = get_week_end(now_dt)
+    
+    # Only keep the last NUM_WEEKS windows ending before or on the current week
+    all_week_ends = sorted(attacks_df['week_end'].unique())
+    # Filter to only include weeks that are on or before the current week
+    valid_week_ends = [we for we in all_week_ends if we <= current_week_end]
+    # Take the last NUM_WEEKS from these valid weeks
+    last_n_ends = valid_week_ends[-NUM_WEEKS:] if len(valid_week_ends) >= NUM_WEEKS else valid_week_ends
+    attacks_df = attacks_df[attacks_df['week_end'].isin(last_n_ends)]
+    
+    # Calculate weekly statistics
+    weekly_counts = attacks_df.groupby('week_end').size().reset_index(name='attacks')
+    
+    # Save to CSV
+    try:
+        weekly_counts.to_csv(OUTPUT_CSV, index=False)
+        logger.info(f'Weekly report saved to {OUTPUT_CSV}')
+    except Exception as e:
+        logger.error(f'Failed to save weekly report: {e}')
+        raise
+    
+    return weekly_counts
+
+
+def generate_daily_report() -> pd.DataFrame:
+    """
+    Generate daily attack counts for the current week.
+    
+    Returns:
+        DataFrame with daily attack counts for current week
+    """
+    # Calculate current week boundaries
+    now_dt = datetime(cur_year, cur_month, cur_day, now.hour, now.minute, now.second)
+    week_end_dt = get_week_end(now_dt)
+    week_start_dt = get_week_start(week_end_dt)
+    
+    logger.info(f"Generating daily report for week {week_start_dt} to {week_end_dt}")
+    
+    # Find relevant database files for current week
+    relevant_db_files = get_relevant_db_files_for_period(week_start_dt, week_end_dt)
+    
+    if not relevant_db_files:
+        logger.warning("No relevant database files found for current week")
+        return pd.DataFrame(columns=['date_only', 'attacks'])
+    
+    all_attacks_daily = []
+    for db_file in relevant_db_files:
+        df = process_database(db_file, week_start_dt, week_end_dt)
+        if df is not None:
+            all_attacks_daily.append(df)
+    
+    if not all_attacks_daily:
+        logger.warning('No attack data found for current week')
+        return pd.DataFrame(columns=['date_only', 'attacks'])
+    
+    attacks_df_daily = pd.concat(all_attacks_daily, ignore_index=True)
+    
+    # The date filtering was already done in process_database, so we can work directly with date_only
+    if 'date_only' not in attacks_df_daily.columns:
+        # Fallback if date_only wasn't created (shouldn't happen with our updated logic)
+        attacks_df_daily['startDate'] = pd.to_datetime(attacks_df_daily['startDate'])
+        attacks_df_daily['date_only'] = attacks_df_daily['startDate'].dt.date
+    
+    if attacks_df_daily.empty:
+        logger.warning('No attacks found in current week after filtering')
+        return pd.DataFrame(columns=['date_only', 'attacks'])
+    
+    daily_counts = attacks_df_daily.groupby('date_only').size().reset_index(name='attacks')
+    
+    # Save daily stats to CSV
+    try:
+        daily_counts.to_csv(OUTPUT_DAILY_CSV, index=False)
+        logger.info(f'Daily report saved to {OUTPUT_DAILY_CSV}')
+    except Exception as e:
+        logger.error(f'Failed to save daily report: {e}')
+        raise
+    
+    return daily_counts
+
+# --- HTML Report with Google Charts ---
+def create_html_report(weekly_counts: pd.DataFrame, daily_counts: pd.DataFrame, 
+                      num_weeks: int = NUM_WEEKS) -> str:
+    """
+    Create HTML report with Google Charts visualization.
+    
+    Args:
+        weekly_counts: DataFrame with weekly attack counts
+        daily_counts: DataFrame with daily attack counts  
+        num_weeks: Number of weeks to display
+    
+    Returns:
+        HTML string for the report
+    """
+    # Prepare weekly data (last num_weeks)
+    if 'week_end' not in weekly_counts.columns:
+        logger.error("Weekly counts missing 'week_end' column")
+        weekly_chart_data = [['Week End', 'Attacks']]
+    else:
+        weekly_counts_sorted = weekly_counts.sort_values(['week_end'])
+        last_weeks = weekly_counts_sorted.tail(num_weeks)
+        weekly_chart_data = [['Week End', 'Attacks']]
+        for _, row in last_weeks.iterrows():
+            label = str(row['week_end'])[:16]  # e.g. '2025-09-12 00:00'
+            weekly_chart_data.append([label, int(row['attacks'])])
+
+    # Verification logic
+    daily_total = int(daily_counts['attacks'].sum()) if not daily_counts.empty else 0
+    last_week_total = 0
+    if not weekly_counts.empty and 'week_end' in weekly_counts.columns:
+        weekly_counts_sorted = weekly_counts.sort_values(['week_end'])
+        if not weekly_counts_sorted.empty:
+            last_week_total = int(weekly_counts_sorted.iloc[-1]['attacks'])
+    
+    match_status = (daily_total == last_week_total)
+    match_message = f"<b>Daily total for week: {daily_total}</b><br><b>Weekly trend last value: {last_week_total}</b>"
+    if not match_status:
+        match_message += '<br><span style="color:red;font-weight:bold;">WARNING: Daily total does not match weekly trend!</span>'
+
+    # Prepare daily data for current week
+    if not daily_counts.empty:
+        daily_chart_data = [['Date', 'Attacks']]
+        for _, row in daily_counts.iterrows():
+            # Pass date as 'new Date("YYYY-MM-DD")' for Google Charts
+            daily_chart_data.append([f"new Date('{str(row['date_only'])}')", int(row['attacks'])])
+    else:
+        daily_chart_data = [['Date', 'Attacks']]
+
+    # Helper function for JavaScript array generation
+    def js_array(data):
+        """Convert Python list to JavaScript array, preserving Date constructors."""
+        out = []
+        for row in data:
+            if len(row) > 0 and isinstance(row[0], str) and row[0].startswith('new Date('):
+                out.append(f'[{row[0]},{row[1]}]')
+            else:
+                out.append(json.dumps(row))
+        return '[\n' + ',\n'.join(out) + '\n]'
+
+    # HTML template
+    html = f"""
+<html>
+<head>
+  <title>Weekly Attacks Report</title>
+  <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
+  <script type="text/javascript">
+    google.charts.load('current', {{packages:['corechart']}});
+    google.charts.setOnLoadCallback(drawCharts);
+    function drawCharts() {{
+      // Weekly trend
+      var weekly_data = google.visualization.arrayToDataTable({json.dumps(weekly_chart_data)});
+      var weekly_options = {{
+        title: 'Weekly Attacks Trend (last {num_weeks} weeks)',
+        legend: {{ position: 'none' }},
+        hAxis: {{ title: 'Week' }},
+        vAxis: {{ title: 'Number of Attacks' }}
+      }};
+      var weekly_chart = new google.visualization.ColumnChart(document.getElementById('weekly_chart'));
+      weekly_chart.draw(weekly_data, weekly_options);
+
+      // Daily trend for current week
+      var daily_data = google.visualization.arrayToDataTable({js_array(daily_chart_data)});
+      var daily_options = {{
+        title: 'Daily Attacks Trend (Current Week)',
+        legend: {{ position: 'none' }},
+        hAxis: {{ title: 'Date' }},
+        vAxis: {{ title: 'Number of Attacks' }}
+      }};
+      var daily_chart = new google.visualization.ColumnChart(document.getElementById('daily_chart'));
+      daily_chart.draw(daily_data, daily_options);
+    }}
+  </script>
+</head>
+<body>
+  <h1>Weekly Attacks Report</h1>
+  <div id="weekly_chart" style="width: 800px; height: 400px;"></div>
+  <div id="daily_chart" style="width: 800px; height: 400px;"></div>
+  <div id="stats_check" style="margin-top:20px;font-size:1.2em;">{match_message}</div>
+</body>
+</html>
+"""
+    return html
+
+
+def main():
+    """Main execution function."""
+    try:
+        # Validate configuration
+        validate_config()
+        
+        logger.info("Starting weekly attacks report generation")
+        
+        # Generate reports
+        weekly_counts = generate_weekly_report(use_cache=True)
+        daily_counts = generate_daily_report()
+        
+        # Create and save HTML report
+        html_content = create_html_report(weekly_counts, daily_counts, NUM_WEEKS)
+        
+        with open(OUTPUT_HTML, 'w', encoding='utf-8') as f:
+            f.write(html_content)
+        logger.info(f'HTML report saved to {OUTPUT_HTML}')
+        
+        logger.info("Weekly attacks report generation completed successfully")
+        
+    except Exception as e:
+        logger.error(f"Failed to generate reports: {e}")
+        raise
+
+
+if __name__ == '__main__':
+    main()

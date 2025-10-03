@@ -1,0 +1,24 @@
+1. open db
+2. define a weeek range from to clearly (tue to tue) 
+3. run sql query get the numbee = 123
+4. check if file exists
+if not
+create
+['week1', 123]
+ 
+if file exits, append
+ 
+['week0',34234],
+['week1', 123]
+ 
+pass to google to build the chart
+ 
+---------
+next run
+identify the week
+ 
+calc the nubmer
+ 
+['week0',34234],
+['week1', 123]
+['week2', 3432]

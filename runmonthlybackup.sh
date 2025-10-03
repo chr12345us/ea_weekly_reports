@@ -8,18 +8,18 @@
 current_date_time=$(date +"%Y-%m-%d %H:%M:%S")
 echo "Current Date and Time: $current_date_time"
 ###################### Mandatory variables #########################################################
-cust_list=(Customer-name)	#space separated list of customer IDs, do not use underscores
+cust_list=(EA)	#space separated list of customer IDs, do not use underscores
 
 ####################################################################################################
 
 ##################### Report Range #################################################################
 
-cur_day=$(date +'%d')
+cur_month=$(date +'%m') # This sets the month to the current month by default, so the data will be collected and report will be generatd for the previous month. If the data needs to be collected for the different month, set the numberic value. For example if set to 4 (April), the script will collect and generate report for March.
+#cur_month=11
 
-cur_month=$(date +'%m') # This sets the month to the current month by default, so the data will be collected and report will be generatd for the previous $report_range. If the data needs to be collected for the different month, set the numberic value. For example if set to 4 (April), the script will collect and generate report for March.
-# cur_month=3
 cur_year=$(date +%Y)
-# cur_year=2024
+#cur_year=2024
+
 prev_year=$(expr $cur_year - 1)
 
 if [[ "$cur_month" != 01 ]] && [ "$cur_month" != 1 ]; then
@@ -38,11 +38,11 @@ fi
 if (( "$prev_month" >= 1 && "$prev_month" <= 9 )); then
     # Add a leading zero if the number is between 1 and 9
     prev_month=$(printf "%02d" "$prev_month")
-    #echo "Formatted Prev month: $prev_month"
+    #echo "Formatted previous month: $prev_month"
 fi
 
 abuseipdb=true
-abuseipdb_key="xxxx"
+abuseipdb_key="1331ffc49bbd5c9f4ebdbea55e0e8c3f98e91fa8a43cb6c675c3f5ba324fbb3f790db5849fe84131"
 #This variable is needed to fetch the information about top 10 malicious IP addresses from abuseipdb.com.
 #Register and obtain your API key from https://www.abuseipdb.com/account/api
 
@@ -57,7 +57,7 @@ top_n=7
 
 ######################## Convert Forensics(optional) ############################################################
 convert_forensics_to_sqlite=false
-forensics_file_cust_id="CustomerName"
+forensics_file_cust_id="EA"
 forensics_date_format="%m.%d.%Y %I:%M:%S %p"
 #forensic_date_format options: 
 #'%m.%d.%Y %I:%M:%S %p',     # Format with 12-hour time
@@ -71,36 +71,38 @@ converted_sqlite_file_name="database_CUSTID_10.sqlite"
 #######################Action variables switch on/off(optional)####################################################
 
 del_old_files=true
-collect_data=true
+collect_data=false
 gen_python_csv_data=true #generate csv data using python scripts
 modify_csv=true
-generate_report=true
-generate_appendix=true
+generate_report=false
+generate_appendix=false
 db_from_forensics=false
 analyze_trends=true
 email_send=true
+
 ####################################################################################################
 
 
 ####################### Email set up parameters for sending email with reports######################
-smtp_auth=true
-smtp_server="smtp.server.com" # SMTP server name
+smtp_auth=false
+smtp_server="infra-npsmtp-lb.iad1.infery.com" # SMTP server name
 smtp_server_port=25 # SMTP server port
-smtp_sender="sender_email@email.com" # Email sender address setting
-smtp_password="smtp_password"  #Email password (optional)
-smtp_list=(user1@mail.com user2@mail.com) #space separated list of email addresses		
+smtp_sender="radware@ea.com" # Email sender address setting
+smtp_password="radware"  #Email password (optional)
+smtp_list=(egore@radware.com cristianh@radware.com fabriciol@radware.com jesus.rojas@radware.com jreeley@ea.com rtovar@ea.com)
 ####################################################################################################
 
 
 
-#######################Proxy variables (optional) ##############################################################
-is_http_proxy=false
-is_https_proxy=false
+
+#######################Proxy variables##############################################################
+is_http_proxy=true
+is_https_proxy=true
 
 is_proxy_for_email=false
 
-http_proxy="proxyserver.com:3128"
-https_proxy="proxyserver.com:3128"
+http_proxy="syseng-proxy.iad1.infery.com:3128"
+https_proxy="syseng-proxy.iad1.infery.com:3128"
 ####################################################################################################
 
 
@@ -135,7 +137,7 @@ for cust_id in "${cust_list[@]}"
 do
 	if [ $collect_data == "true" ]; then
 		echo "Collecting Data from Vision"
-		python3 script_files/collector.py $cust_id monthly $cur_month $cur_day $cur_year
+		php collectAll.php -- -upper=01.$cur_month.$cur_year -range="-1 month" -id="$cust_id"
 	fi
 done
 
@@ -167,21 +169,12 @@ do
 
 	####################### Generate CSV Data #################################
 
-
-	if [[ $gen_python_csv_data == "true" ]]; then
-	
-		if [[ "$cur_month" == 1 ]] || [ "$cur_month" == 01 ]; then # Now is January case
-			echo "Generating csv data for $prev_month $prev_year"
-			python3 script_files/charts_and_tables.py $cust_id $prev_month $prev_year #this will generate csv for the previouis month
-		else
-			# Non January case
-			echo "Generating csv data for $prev_month $cur_year"
-			python3 script_files/charts_and_tables.py $cust_id $prev_month $cur_year #this will generate csv for the previouis month
-		fi	
+	if [ $gen_python_csv_data == "true" ]; then
+		echo "Generating csv data"
+		python3 script_files/charts_and_tables.py $cust_id $prev_month
+		echo "Python  csv data generated"
 
 	fi
-
-
 	####################### Modify CSV Data #################################
 	
 	
@@ -223,17 +216,17 @@ do
 	######################### Analyze Trends ######################
 
 	if [[ "$analyze_trends" == "true" ]]; then
-	
-			if [[ "$cur_month" == 1 ]] || [ "$cur_month" == 01 ]; then # Case for the month of January
-				echo "Analyzing trends for $prev_month $prev_year"
-				python3 script_files/analyze_trends.py $cust_id $prev_month $prev_year #this will generate trends for the previouis month
-			else
-				# Case if current month is not January
-				echo "Analyzing trends for $prev_month $cur_year"
-				python3 script_files/analyze_trends.py $cust_id $prev_month $cur_year #this will generate trends for the previouis month
-			fi
+
+		if [[ "$cur_month" != 01 ]] && [ "$cur_month" != 1 ]; then
+			echo "Analyzing trends for $prev_month $cur_year"
+			python3 script_files/analyze_trends.py $cust_id $prev_month $cur_year #this will generate appendix for the previouis month
+		else
+			echo "Analyzing trends for $prev_month $prev_year"
+			python3 script_files/analyze_trends.py $cust_id $prev_month $prev_year #this will generate appendix for the previouis month
+		fi
+		
 	fi
-	
+
 done
 
 

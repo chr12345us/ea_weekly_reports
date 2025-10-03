@@ -9,18 +9,17 @@ current_date_time=$(date +"%Y-%m-%d %H:%M:%S")
 echo "Current Date and Time: $current_date_time"
 
 ###################### Mandatory variables #########################################################
-cust_list=(Customer-Name)	#space separated list of customer IDs, do not use underscore
+cust_list=(EA)	#space separated list of customer IDs
 
 ####################################################################################################
 
 ##################### Report Range #################################################################
 
 cur_day=$(date +'%d')
-#cur_day=1
+#cur_day=9
 
 cur_month=$(date +'%m') # This sets the month to the current month by default, so the data will be collected and report will be generatd for the previous $report_range. If the data needs to be collected for the different month, set the numberic value. For example if set to 4 (April), the script will collect and generate report for March.
-#cur_month=1
-
+#cur_month=10
 cur_year=$(date +%Y)
 #cur_year=2024
 
@@ -45,14 +44,14 @@ if (( "$prev_month" >= 1 && "$prev_month" <= 9 )); then
 fi
 
 abuseipdb=false
-abuseipdb_key="xxx"
+abuseipdb_key="1331ffc49bbd5c9f4ebdbea55e0e8c3f98e91fa8a43cb6c675c3f5ba324fbb3f790db5849fe84131"
 #This variable is needed to fetch the information about top 10 malicious IP addresses from abuseipdb.com.
 #Register and obtain your API key from https://www.abuseipdb.com/account/api
 
 delete_old_files_retention=6
 #Number of months to keep the old files. For example if set to 6, the script will delete all files older than 6 months.
 
-top_n=7
+top_n=10
 #Number of top N items to be displayed in the report. For example if set to 10, the script will display top 10 items in the report.
 
 
@@ -62,8 +61,7 @@ top_n=7
 #######################Action variables switch on/off(optional)####################################################
 collect_data=true
 gen_python_csv_data=true  #generate csv data using python scripts
-modify_csv=true
-db_from_forensics=false
+modify_csv=false
 analyze_trends=true
 email_send=true
 ####################################################################################################
@@ -71,25 +69,24 @@ email_send=true
 
 ####################### Email set up parameters for sending email with reports######################
 smtp_auth=false
-smtp_server="smtpserver.com" # SMTP server name
+smtp_server="infra-npsmtp-lb.iad1.infery.com" # SMTP server name
 smtp_server_port=25 # SMTP server port
-smtp_sender="radware@radware.com" # Email sender address setting
+smtp_sender="radware@ea.com" # Email sender address setting
 smtp_password="radware"  #Email password (optional)
-smtp_list=(user@radware.com user2@radware.com)
-
-
+smtp_list=(egore@radware.com eegorov@contractor.ea.com cristian.hera@radware.com jesus.rojas@radware.com fabriciol@radware.com)
+#smtp_list=(fabriciol@radware.com)
 ####################################################################################################
 
 ### cd app
 
 #######################Proxy variables##############################################################
-is_http_proxy=false
-is_https_proxy=false
+is_http_proxy=true
+is_https_proxy=true
 
 is_proxy_for_email=false
 
-http_proxy="proxyserver.com:3128"
-https_proxy="proxyserver.com:3128"
+http_proxy="syseng-proxy.iad1.infery.com:3128"
+https_proxy="syseng-proxy.iad1.infery.com:3128"
 ####################################################################################################
 
 
@@ -122,7 +119,8 @@ do
 
 	if [ $collect_data == "true" ]; then
 		
-		python3 script_files/collector.py $cust_id daily $cur_month $cur_day $cur_year
+		python3 script_files/collector.py EA daily	
+
 	fi
 done
 
@@ -153,21 +151,16 @@ do
 
 	####################### Generate CSV Data #################################
 
-	if [[ $gen_python_csv_data == "true" ]]; then
-	
-		if [[ "$cur_day" == 1 ]] || [ "$cur_day" == 01 ]; then
-			if [[ "$cur_month" == 1 ]] || [ "$cur_month" == 01 ]; then # 1st of the month and January
-				echo "Generating csv data for $prev_month $prev_year"
-				python3 script_files/charts_and_tables_daily.py $cust_id $prev_month $prev_year #this will generate csv for the previouis month
-			else
-				# 1st of the month not January
-				echo "Generating csv data for $prev_month $cur_year"
-				python3 script_files/charts_and_tables_daily.py $cust_id $prev_month $cur_year #this will generate csv for the previouis month
-			fi	
-		else # if day is not 1
-			echo "Generating csv data for $cur_month $cur_year"
-			python3 script_files/charts_and_tables_daily.py $cust_id $cur_month $cur_year #this will generate csv for the previouis month
+	if [ $gen_python_csv_data == "true" ]; then
+		echo "Generating csv data"
+		if [ "$cur_day" == 1 ] || [ "$cur_day" == 01 ]; then
+			python3 script_files/charts_and_tables_daily.py $cust_id $prev_month
+
+		else
+			python3 script_files/charts_and_tables_daily.py $cust_id $cur_month
+			
 		fi
+		echo "Python  csv data generated"
 
 	fi
 	
