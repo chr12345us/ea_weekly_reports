@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Main Weekly Reports Script - Import-based Architecture with JSON Configuration
-This script reads configuration from JSON file and orchestrates the weekly attack reports
+Main Weekly Reports Script - Import-based Architecture with INI Configuration
+This script reads configuration from INI file and orchestrates the weekly attack reports
 """
 
 import sys
 import os
-import json
+import configparser
 from datetime import datetime
 
 # Since main_weekly.py is now in script_files directory alongside the other modules,
@@ -40,21 +40,21 @@ def get_project_root():
 
 def load_configuration():
     """
-    Load configuration from JSON file.
+    Load configuration from INI file.
     """
     project_root = get_project_root()
-    config_file_path = os.path.join(project_root, 'config_files', 'weekly_config.json')
+    config_file_path = os.path.join(project_root, 'config_files', 'weekly_config.ini')
     
     try:
-        with open(config_file_path, 'r') as f:
-            config = json.load(f)
+        config = configparser.ConfigParser()
+        config.read(config_file_path)
         print(f"✓ Configuration loaded from: {os.path.relpath(config_file_path, project_root)}")
         return config
     except FileNotFoundError:
         print(f"ERROR: Configuration file not found: {config_file_path}")
         sys.exit(1)
-    except json.JSONDecodeError as e:
-        print(f"ERROR: Invalid JSON in configuration file: {e}")
+    except configparser.Error as e:
+        print(f"ERROR: Invalid INI format in configuration file: {e}")
         sys.exit(1)
 
 
@@ -64,7 +64,7 @@ def main():
     Configuration is loaded from JSON file.
     """
     print("=" * 60)
-    print("WEEKLY ATTACK TRENDS REPORT - JSON-BASED CONFIGURATION")
+    print("WEEKLY ATTACK TRENDS REPORT - INI-BASED CONFIGURATION")
     print("=" * 60)
     print()
     
@@ -75,39 +75,56 @@ def main():
     print()
     
     # ================================
-    # LOAD CONFIGURATION FROM JSON
+    # LOAD CONFIGURATION FROM INI
     # ================================
     
     config = load_configuration()
     
     # Extract configuration sections
-    weekly_config = config.get('weekly_reports', {})
-    email_config = config.get('email', {})
+    weekly_config = config['weekly_reports']
+    email_config = config['email']
+    global_config = config['global']
     
     # Debug: Print the email config values
-    print(f"DEBUG: email_config from JSON: {email_config}")
-    print(f"DEBUG: use_tls from JSON: {email_config.get('use_tls', 'NOT_FOUND')}")
-    print(f"DEBUG: use_authentication from JSON: {email_config.get('use_authentication', 'NOT_FOUND')}")
+    print(f"DEBUG: email_config from INI: {dict(email_config)}")
+    print(f"DEBUG: use_tls from INI: {email_config.get('use_tls', 'NOT_FOUND')}")
+    print(f"DEBUG: use_authentication from INI: {email_config.get('use_authentication', 'NOT_FOUND')}")
+    print()
+    
+    # Handle current date override from global config
+    current_date = datetime.now()  # Default to current time
+    if global_config.get('cur_date'):
+        try:
+            # Parse the date format from global config
+            date_format = global_config.get('datetime_format', '%Y-%m-%d %H:%M:%S')
+            current_date = datetime.strptime(global_config.get('cur_date'), date_format)
+            print(f"DEBUG: Using override date from config: {current_date}")
+        except ValueError as e:
+            print(f"WARNING: Invalid cur_date format in config: {e}")
+            print("Using current datetime instead.")
+            current_date = datetime.now()
+    else:
+        print(f"DEBUG: Using current datetime: {current_date}")
     print()
     
     # Core Report Configuration
     REPORT_CONFIG = {
         'CUST_ID': weekly_config.get('CUST_ID', 'EA'),
-        'WEEK_END_DAY': weekly_config.get('WEEK_END_DAY', 6),  # Sunday = 6 (0=Monday, 6=Sunday)
-        'WEEKS_NO': weekly_config.get('WEEKS_NO', 6),          # Number of weeks to include in report
-        'CURRENT_DATE': datetime.now()
+        'WEEK_END_DAY': weekly_config.getint('WEEK_END_DAY', 6),  # Sunday = 6 (0=Monday, 6=Sunday)
+        'WEEKS_NO': weekly_config.getint('WEEKS_NO', 6),          # Number of weeks to include in report
+        'CURRENT_DATE': current_date
     }
     
     # Email Configuration
     EMAIL_CONFIG = {
         'smtp_host': email_config.get('smtp_host', 'smtp.gmail.com'),
-        'smtp_port': email_config.get('smtp_port', 587),
+        'smtp_port': email_config.getint('smtp_port', 587),
         'email_user': email_config.get('email_user', ''),
         'email_pass': email_config.get('email_pass', ''),
         'from_email': email_config.get('from_email', ''),
-        'to_emails': email_config.get('to_emails', []),
-        'use_authentication': email_config.get('use_authentication', True),
-        'use_tls': email_config.get('use_tls', True),
+        'to_emails': email_config.get('to_emails', '').split(','),
+        'use_authentication': email_config.getboolean('use_authentication', True),
+        'use_tls': email_config.getboolean('use_tls', True),
         'subject': None  # Will be set dynamically using template
     }
     
@@ -117,7 +134,7 @@ def main():
     print()
     
     # Email Feature Toggle
-    SEND_EMAIL = email_config.get('send_email', True)  # From JSON configuration
+    SEND_EMAIL = email_config.getboolean('send_email', True)  # From INI configuration
     
     # ================================
     # REPORT GENERATION
@@ -204,7 +221,7 @@ def validate_configuration():
     project_root = get_project_root()
     
     # Check if configuration file exists
-    config_file_path = os.path.join(project_root, 'config_files', 'weekly_config.json')
+    config_file_path = os.path.join(project_root, 'config_files', 'weekly_config.ini')
     if not os.path.exists(config_file_path):
         print(f"ERROR: Configuration file missing: {config_file_path}")
         return False
