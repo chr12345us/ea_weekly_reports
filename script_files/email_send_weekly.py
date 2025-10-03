@@ -49,19 +49,23 @@ def send_weekly_email(cust_id: str, week_end_date: str, email_config: dict) -> b
         report_dir = os.path.join(project_root, "report_files", cust_id)
         csv_filename = f"weekly_trends_{week_end_date}.csv"
         html_filename = f"weekly_trends_chart_{week_end_date}.html"
+        daily_csv_filename = f"weekly_day_trends_{week_end_date}.csv"
         csv_path = os.path.join(report_dir, csv_filename)
         html_path = os.path.join(report_dir, html_filename)
+        daily_csv_path = os.path.join(report_dir, daily_csv_filename)
         
         print(f"Project root: {project_root}")
         print(f"Looking for files in: {report_dir}")
         
         # Check if files exist
         if not os.path.exists(csv_path):
-            print(f"CSV file not found: {csv_path}")
+            print(f"Weekly CSV file not found: {csv_path}")
             return False
         if not os.path.exists(html_path):
             print(f"HTML file not found: {html_path}")
             return False
+        # Daily CSV is optional - only attach if it exists
+        has_daily_csv = os.path.exists(daily_csv_path)
         
         # Create message container
         msg = MIMEMultipart()
@@ -70,22 +74,23 @@ def send_weekly_email(cust_id: str, week_end_date: str, email_config: dict) -> b
         msg['Subject'] = email_config['subject']
         
         # Email body
+        daily_csv_text = f"\n- Weekly day trends CSV: {daily_csv_filename}" if has_daily_csv else ""
         body = f"""
 {cust_id}: Weekly Attack Trends Report
 
 Week End Date: {week_end_date}
 
 Please find attached:
-- CSV data file: {csv_filename}
-- HTML chart file: {html_filename}
+- Weekly trends CSV: {csv_filename}
+- Combined HTML chart: {html_filename} (includes both daily and weekly charts){daily_csv_text}
 
 Best regards,
 Radware Automated Reporting System
 """
         msg.attach(MIMEText(body, 'plain'))
         
-        # Attach CSV file
-        print(f"Attaching CSV file: {csv_path}")
+        # Attach weekly CSV file
+        print(f"Attaching weekly CSV file: {csv_path}")
         with open(csv_path, "rb") as attachment:
             part = MIMEBase('application', 'octet-stream')
             part.set_payload(attachment.read())
@@ -96,6 +101,22 @@ Radware Automated Reporting System
             f'attachment; filename= {csv_filename}'
         )
         msg.attach(part)
+        
+        # Attach daily CSV file if it exists
+        if has_daily_csv:
+            print(f"Attaching weekly day trends CSV file: {daily_csv_path}")
+            with open(daily_csv_path, "rb") as attachment:
+                part = MIMEBase('application', 'octet-stream')
+                part.set_payload(attachment.read())
+            
+            encoders.encode_base64(part)
+            part.add_header(
+                'Content-Disposition',
+                f'attachment; filename= {daily_csv_filename}'
+            )
+            msg.attach(part)
+        else:
+            print("Daily CSV file not found, skipping attachment")
         
         # Attach HTML file
         print(f"Attaching HTML file: {html_path}")

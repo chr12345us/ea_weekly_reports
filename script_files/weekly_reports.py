@@ -351,7 +351,7 @@ def generate_google_chart(cust_id: str, csv_filename: str = None, html_filename:
             width: '75%',
             height: '70%'
           }},
-          colors: ['#007bff'],
+          colors: ['#3366cc'],
           bar: {{
             groupWidth: '60%'
           }}
@@ -375,6 +375,333 @@ def generate_google_chart(cust_id: str, csv_filename: str = None, html_filename:
         htmlfile.write(html_content)
     
     print(f"Google Chart HTML saved to: {html_path}")
+    return html_content
+
+
+def get_attacks_count_for_day(date: datetime, cust_id: str) -> int:
+    """
+    Get the total number of attacks for a specific day from the appropriate SQLite database.
+    
+    Args:
+        date: The specific date to query
+        cust_id: Customer identifier for database path
+        
+    Returns:
+        Total count of attacks for the specified day
+    """
+    project_root = get_project_root()
+    
+    # Get the database filename for this date
+    db_filename = f"database_{cust_id}_{date.month:02d}_{date.year}.sqlite"
+    db_path = os.path.join(project_root, "database_files", cust_id, db_filename)
+    
+    if not os.path.exists(db_path):
+        print(f"Database not found for {date.strftime('%Y-%m-%d')}: {db_path}")
+        return 0
+    
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # Query attacks table for the specific date
+        query = """
+        SELECT COUNT(*) FROM attacks 
+        WHERE DATE(startDate) = ?
+        """
+        cursor.execute(query, (date.strftime('%Y-%m-%d'),))
+        
+        count = cursor.fetchone()[0]
+        conn.close()
+        
+        return count
+        
+    except sqlite3.Error as e:
+        print(f"Error querying {db_filename} for {date.strftime('%Y-%m-%d')}: {e}")
+        return 0
+    except Exception as e:
+        print(f"Unexpected error with {db_filename} for {date.strftime('%Y-%m-%d')}: {e}")
+        return 0
+
+
+def generate_daily_attacks_csv(cust_id: str, week_end_day: int = 6, current_date: datetime = None) -> tuple[str, int]:
+    """
+    Generate daily attack data for the past week and save to CSV.
+    
+    Args:
+        cust_id: Customer identifier for file path
+        week_end_day: Day of the week that ends the week (0=Monday, 6=Sunday)
+        current_date: Reference date for determining the past week
+        
+    Returns:
+        Tuple of (csv_filename, total_attacks_for_week)
+    """
+    if current_date is None:
+        current_date = datetime.now()
+    
+    # Get the most recent completed week
+    week_start, week_end = get_one_week_behind(current_date, week_end_day)
+    
+    print(f"Generating daily attacks data for week: {week_start.strftime('%Y-%m-%d')} to {week_end.strftime('%Y-%m-%d')}")
+    
+    project_root = get_project_root()
+    report_dir = os.path.join(project_root, "report_files", cust_id)
+    os.makedirs(report_dir, exist_ok=True)
+    
+    # Create CSV filename with week end date
+    csv_filename = f"weekly_day_trends_{week_end.strftime('%Y-%m-%d')}.csv"
+    csv_path = os.path.join(report_dir, csv_filename)
+    
+    # Generate daily data
+    daily_data = []
+    total_attacks = 0
+    current_day = week_start
+    
+    while current_day <= week_end:
+        attacks_count = get_attacks_count_for_day(current_day, cust_id)
+        daily_data.append({
+            'date': current_day.strftime('%Y-%m-%d'),
+            'day_name': current_day.strftime('%A'),
+            'attacks_count': attacks_count
+        })
+        total_attacks += attacks_count
+        print(f"  {current_day.strftime('%A %Y-%m-%d')}: {attacks_count} attacks")
+        current_day += timedelta(days=1)
+    
+    # Save to CSV
+    with open(csv_path, 'w', newline='') as csvfile:
+        fieldnames = ['date', 'day_name', 'attacks_count']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(daily_data)
+    
+    print(f"Daily attacks CSV saved to: {csv_path}")
+    print(f"Total attacks for the week: {total_attacks}")
+    
+    return csv_filename, total_attacks
+
+
+def generate_combined_html_chart(cust_id: str, daily_csv_filename: str, weekly_csv_filename: str = None, html_filename: str = None) -> str:
+    """
+    Generate HTML with both daily and weekly Google Charts.
+    Daily chart appears first, followed by weekly chart.
+    
+    Args:
+        cust_id: Customer identifier for file path
+        daily_csv_filename: Filename for daily attacks CSV
+        weekly_csv_filename: Optional filename for weekly trends CSV, defaults to weekly_trends.csv
+        html_filename: Optional HTML filename, defaults to weekly_trends_chart_{date}.html
+        
+    Returns:
+        HTML content with both charts
+    """
+    project_root = get_project_root()
+    
+    if weekly_csv_filename is None:
+        weekly_csv_filename = "weekly_trends.csv"
+    
+    # Extract date from daily CSV filename for HTML filename
+    if html_filename is None:
+        date_match = daily_csv_filename.replace('weekly_day_trends_', '').replace('.csv', '')
+        html_filename = f"weekly_trends_chart_{date_match}.html"
+    
+    daily_csv_path = os.path.join(project_root, "report_files", cust_id, daily_csv_filename)
+    weekly_csv_path = os.path.join(project_root, "report_files", cust_id, weekly_csv_filename)
+    
+    # Read daily CSV data
+    daily_chart_data = []
+    if os.path.exists(daily_csv_path):
+        with open(daily_csv_path, 'r', newline='') as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                date = datetime.strptime(row['date'], '%Y-%m-%d')
+                attacks_count = int(row['attacks_count'])
+                day_name = row['day_name']
+                daily_chart_data.append((date, attacks_count, day_name))
+    
+    # Read weekly CSV data (existing logic)
+    weekly_chart_data = []
+    if os.path.exists(weekly_csv_path):
+        with open(weekly_csv_path, 'r', newline='') as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                week_end = datetime.strptime(row['week_end'], '%Y-%m-%d')
+                attacks_count = int(row['attacks_count'])
+                weekly_chart_data.append((week_end, attacks_count))
+    
+    # Sort data by date
+    daily_chart_data.sort(key=lambda x: x[0])
+    weekly_chart_data.sort(key=lambda x: x[0])
+    
+    # Generate JavaScript data arrays with annotations
+    daily_js_data_rows = []
+    for date, attacks_count, day_name in daily_chart_data:
+        date_formatted = date.strftime('%m/%d')  # Shorter format for daily
+        # Format: ['Label', Value, 'Annotation']
+        daily_js_data_rows.append(f"['{day_name} {date_formatted}', {attacks_count}, '{attacks_count:,}']")
+    
+    weekly_js_data_rows = []
+    for week_end, attacks_count in weekly_chart_data:
+        date_formatted = week_end.strftime('%m/%d/%y')
+        # Format: ['Label', Value, 'Annotation']
+        weekly_js_data_rows.append(f"['{date_formatted}', {attacks_count}, '{attacks_count:,}']")
+    
+    daily_js_data = ",\n          ".join(daily_js_data_rows)
+    weekly_js_data = ",\n          ".join(weekly_js_data_rows)
+    
+    # HTML template with both charts
+    html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Attack Trends Report</title>
+    <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
+    <script type="text/javascript">
+      google.charts.load('current', {{'packages':['corechart']}});
+      google.charts.setOnLoadCallback(drawCharts);
+
+      function drawCharts() {{
+        drawDailyChart();
+        drawWeeklyChart();
+      }}
+
+      function drawDailyChart() {{
+        var data = google.visualization.arrayToDataTable([
+          ['Day of the week', 'Attacks', {{ role: 'annotation' }}],
+          {daily_js_data}
+        ]);
+
+        var options = {{
+          title: 'Daily Attack Trends - Past Week',
+          titleTextStyle: {{
+            fontSize: 18,
+            bold: true
+          }},
+          hAxis: {{
+            title: 'Day of the week',
+            titleTextStyle: {{
+              fontSize: 14,
+              bold: true
+            }},
+            textStyle: {{
+              fontSize: 12
+            }}
+          }},
+          vAxis: {{
+            title: 'Number of Attacks',
+            titleTextStyle: {{
+              fontSize: 14,
+              bold: true
+            }},
+            format: '#,###'
+          }},
+          legend: {{
+            position: 'none'
+          }},
+          backgroundColor: '#f8f9fa',
+          chartArea: {{
+            left: 80,
+            top: 80,
+            width: '75%',
+            height: '70%'
+          }},
+          colors: ['#3366cc'],
+          bar: {{
+            groupWidth: '60%'
+          }},
+          annotations: {{
+            alwaysOutside: true,
+            textStyle: {{
+              fontSize: 12,
+              bold: true,
+              color: '#3366cc'
+            }},
+            stem: {{
+              color: '#3366cc',
+              length: 8
+            }}
+          }}
+        }};
+
+        var chart = new google.visualization.ColumnChart(document.getElementById('daily_chart'));
+        chart.draw(data, options);
+      }}
+
+      function drawWeeklyChart() {{
+        var data = google.visualization.arrayToDataTable([
+          ['Week End Date', 'Attacks', {{ role: 'annotation' }}],
+          {weekly_js_data}
+        ]);
+
+        var options = {{
+          title: 'Weekly Attack Trends',
+          titleTextStyle: {{
+            fontSize: 18,
+            bold: true
+          }},
+          hAxis: {{
+            title: 'Week End-Date',
+            titleTextStyle: {{
+              fontSize: 14,
+              bold: true
+            }},
+            textStyle: {{
+              fontSize: 12
+            }}
+          }},
+          vAxis: {{
+            title: 'Number of Attacks',
+            titleTextStyle: {{
+              fontSize: 14,
+              bold: true
+            }},
+            format: '#,###'
+          }},
+          legend: {{
+            position: 'none'
+          }},
+          backgroundColor: '#f8f9fa',
+          chartArea: {{
+            left: 80,
+            top: 80,
+            width: '75%',
+            height: '70%'
+          }},
+          colors: ['#3366cc'],
+          bar: {{
+            groupWidth: '60%'
+          }},
+          annotations: {{
+            alwaysOutside: true,
+            textStyle: {{
+              fontSize: 12,
+              bold: true,
+              color: '#3366cc'
+            }},
+            stem: {{
+              color: '#3366cc',
+              length: 8
+            }}
+          }}
+        }};
+
+        var chart = new google.visualization.ColumnChart(document.getElementById('weekly_chart'));
+        chart.draw(data, options);
+      }}
+    </script>
+</head>
+<body>
+    <div style="text-align: center; margin: 20px;">
+        <div id="daily_chart" style="width: 100%; height: 500px; margin-bottom: 30px;"></div>
+        <div id="weekly_chart" style="width: 100%; height: 500px;"></div>
+    </div>
+</body>
+</html>"""
+    
+    # Save HTML file
+    html_path = os.path.join(project_root, "report_files", cust_id, html_filename)
+    with open(html_path, 'w') as htmlfile:
+        htmlfile.write(html_content)
+    
+    print(f"Combined Chart HTML saved to: {html_path}")
     return html_content
 
 
@@ -452,23 +779,55 @@ def generate_weekly_reports(cust_id: str, week_end_day: int, weeks_no: int, curr
                     writer.writerows(rows)
                 
                 # Add the updated last week data
-                attacks_count = get_attacks_count_for_week(last_week_start, last_week_end, cust_id)
-                save_weekly_results_to_csv(last_week_start, last_week_end, attacks_count, cust_id, csv_filename)
-                print(f"Last week updated: {attacks_count} attacks")
+                attacks_count_weekly = get_attacks_count_for_week(last_week_start, last_week_end, cust_id)
+                save_weekly_results_to_csv(last_week_start, last_week_end, attacks_count_weekly, cust_id, csv_filename)
+                print(f"Last week updated: {attacks_count_weekly} attacks")
             else:
                 print(f"Last week ({last_week_start.strftime('%Y-%m-%d')} to {last_week_end.strftime('%Y-%m-%d')}) not found in CSV.")
                 print("Adding last week...")
-                attacks_count = get_attacks_count_for_week(last_week_start, last_week_end, cust_id)
-                save_weekly_results_to_csv(last_week_start, last_week_end, attacks_count, cust_id, csv_filename)
-                print(f"Last week added: {attacks_count} attacks")
+                attacks_count_weekly = get_attacks_count_for_week(last_week_start, last_week_end, cust_id)
+                save_weekly_results_to_csv(last_week_start, last_week_end, attacks_count_weekly, cust_id, csv_filename)
+                print(f"Last week added: {attacks_count_weekly} attacks")
             
             # Trim CSV to maintain only weeks_no weeks
             trim_csv_to_n_weeks(cust_id, weeks_no, csv_filename)
             print("CSV file updated!")
             
-            # Generate Google Chart
+            # Generate Google Chart (old single chart - kept for compatibility)
             print("Generating Google Chart...")
             generate_google_chart(cust_id, csv_filename, html_filename)
+        
+        # NEW FEATURE: Generate daily attacks data and combined chart
+        print()
+        print("=" * 50)
+        print("GENERATING DAILY ATTACKS DATA")
+        print("=" * 50)
+        
+        # Generate daily attacks CSV for the past week
+        daily_csv_filename, daily_total_attacks = generate_daily_attacks_csv(cust_id, week_end_day, current_date)
+        
+        # SANITY CHECK: Compare daily total with weekly total
+        print()
+        print("SANITY CHECK:")
+        print(f"  Daily attacks total (sum of 7 days): {daily_total_attacks}")
+        if 'attacks_count_weekly' in locals():
+            print(f"  Weekly attacks total: {attacks_count_weekly}")
+            if daily_total_attacks == attacks_count_weekly:
+                print("  ✓ PASS: Daily total matches weekly total!")
+            else:
+                print(f"  ⚠ WARNING: Daily total ({daily_total_attacks}) does not match weekly total ({attacks_count_weekly})")
+                print("    This could indicate data inconsistencies or database issues.")
+        else:
+            print("  Weekly total not available for comparison")
+        
+        # Generate combined HTML chart with both daily and weekly data
+        print()
+        print("Generating combined HTML chart with daily and weekly data...")
+        combined_html_filename = f"weekly_trends_chart_{week_end_str}.html"
+        generate_combined_html_chart(cust_id, daily_csv_filename, csv_filename, combined_html_filename)
+        
+        print()
+        print("=" * 50)
         
         print("Weekly trends report completed!")
         return True

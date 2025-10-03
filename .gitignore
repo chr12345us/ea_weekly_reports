@@ -9,8 +9,9 @@
 config_files/customers_dist.json
 text_files/frontpage_en.txt
 text_files/ipToName_dist.txt
-config_files/customers.json
-config_files/weekly_config.json
+config_files/*.json
+config_files/*.ini
+!*.ini.example
 text_files/ipToName.txt
 *.bak
 script_files/config.py
