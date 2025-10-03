@@ -13,9 +13,8 @@ This system processes attack data from SQLite databases, generates detailed CSV 
 ```
 script_files/
 ├── main_weekly.py          # Main orchestrator with INI support
-├── weekly_reports.py       # Enhanced report generation with daily attacks
+├── weekly_reports.py       # Enhanced report generation with daily attacks and charts
 ├── email_send_weekly.py    # Email delivery with multiple attachments
-└── charts_and_tables.py    # Chart generation utilities
 config_files/
 ├── weekly_config.ini       # INI configuration with sections
 └── weekly_config.ini.example # Configuration template
@@ -55,9 +54,8 @@ config_files/
 ea_weekly_reports/
 ├── script_files/
 │   ├── main_weekly.py              # Main orchestrator with INI support
-│   ├── weekly_reports.py           # Enhanced report generation  
-│   ├── email_send_weekly.py        # Email with multiple attachments
-│   └── charts_and_tables.py        # Chart utilities
+│   ├── weekly_reports.py           # Enhanced report generation with integrated charts  
+│   └── email_send_weekly.py        # Email with multiple attachments
 ├── config_files/
 │   ├── weekly_config.ini           # INI configuration file
 │   ├── weekly_config.ini.example   # Configuration template
