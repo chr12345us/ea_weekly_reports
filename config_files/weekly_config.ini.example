@@ -17,10 +17,10 @@ log_level = INFO
 ; use_tls controls TLS/STARTTLS support
 smtp_host = smtp.gmail.com
 smtp_port = 587
-email_user = chr12345us@gmail.com
-email_pass = zadoaromsythnofx
-from_email = chr12345us@gmail.com
-to_emails = chr12345us@hotmail.com,cristianh@radware.com
+email_user = joeschmo@gmail.com
+email_pass = zadoarlkjerv;okhjbe;oijbt
+from_email = joeschmo@gmail.com
+to_emails = joeschmo@hotmail.com,chris@radware.com
 subject_template = Weekly Attack Trends Report - {customer_id} - Week Ending {week_end_date}
 send_email = true
 use_authentication = true
