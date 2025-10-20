@@ -18,7 +18,7 @@ try:
     import email_send_weekly
 except ImportError as e:
     print(f"Error importing modules: {e}")
-    print("Make sure weekly_reports.py and email_send_weekly.py are in the same directory as main_weekly.py")
+    print("Make sure weekly_reports2.py and email_send_weekly.py are in the same directory as main_weekly2.py")
     sys.exit(1)
 
 

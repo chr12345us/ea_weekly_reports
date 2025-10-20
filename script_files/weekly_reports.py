@@ -423,6 +423,432 @@ def get_attacks_count_for_day(date: datetime, cust_id: str) -> int:
         return 0
 
 
+def get_top_attacks_for_daily_chart(customer_id, end_date, week_end_day):
+    """
+    Get top 5 attacks for each day of the past week.
+    Returns data suitable for creating a table under the daily chart.
+    """
+    try:
+        # Use the existing function to get the correct week range
+        week_start, week_end = get_one_week_behind(end_date, week_end_day)
+        
+        print(f"DEBUG: Looking for daily attacks from {week_start.strftime('%Y-%m-%d')} to {week_end.strftime('%Y-%m-%d')}")
+        
+        # Get database file for the month (use week_end instead of end_date)
+        db_month = week_end.strftime("%m")
+        db_year = week_end.strftime("%Y")
+        database_filename = f"database_{customer_id}_{db_month}_{db_year}.sqlite"
+        
+        project_root = get_project_root()
+        database_path = os.path.join(project_root, "database_files", customer_id, database_filename)
+        
+        print(f"DEBUG: Looking for database at: {database_path}")
+        
+        if not os.path.exists(database_path):
+            print(f"Database file not found: {database_path}")
+            return {}
+        
+        conn = sqlite3.connect(database_path)
+        
+        # Get all attacks for the week with attack names
+        query = """
+        SELECT DATE(startDate) as attack_date, name, COUNT(*) as attack_count
+        FROM attacks 
+        WHERE DATE(startDate) BETWEEN ? AND ?
+        GROUP BY DATE(startDate), name
+        ORDER BY attack_date, attack_count DESC
+        """
+        
+        cursor = conn.cursor()
+        cursor.execute(query, [
+            week_start.strftime('%Y-%m-%d'),
+            week_end.strftime('%Y-%m-%d')
+        ])
+        
+        rows = cursor.fetchall()
+        conn.close()
+        
+        print(f"DEBUG: Found {len(rows)} attack records in database")
+        
+        if not rows:
+            return {}
+        
+        # Process the data
+        attack_data = {}
+        for row in rows:
+            attack_date = datetime.strptime(row[0], '%Y-%m-%d')
+            attack_name = row[1]
+            attack_count = row[2]
+            
+            if attack_date not in attack_data:
+                attack_data[attack_date] = {}
+            attack_data[attack_date][attack_name] = attack_count
+        
+        # Get top 5 attacks from THIS WEEK ONLY
+        attack_totals = {}
+        for date_attacks in attack_data.values():
+            for attack, count in date_attacks.items():
+                attack_totals[attack] = attack_totals.get(attack, 0) + count
+        
+        print(f"DEBUG: Found {len(attack_totals)} unique attack types this week")
+        print(f"DEBUG: Attack totals: {attack_totals}")
+        
+        top_5_attacks = sorted(attack_totals.items(), key=lambda x: x[1], reverse=True)[:5]
+        top_5_attacks = [attack[0] for attack in top_5_attacks]
+        
+        print(f"DEBUG: Showing top {len(top_5_attacks)} attacks (max 5)")
+        
+        # Create daily data structure
+        daily_data = {}
+        print(f"DEBUG: Top 5 attacks: {top_5_attacks}")
+        for i in range(7):
+            current_date = week_start + timedelta(days=i)
+            day_name = current_date.strftime('%A')
+            date_str = current_date.strftime('%m/%d')
+            column_name = f"{day_name} {date_str}"
+            
+            daily_data[column_name] = {}
+            day_attacks = attack_data.get(current_date, {})
+            print(f"DEBUG: {column_name} has {len(day_attacks)} attack types")
+            
+            for attack in top_5_attacks:
+                count = day_attacks.get(attack, 0)
+                daily_data[column_name][attack] = count
+        
+        return {'attacks': top_5_attacks, 'data': daily_data}
+        
+    except Exception as e:
+        print(f"Error getting top attacks for daily chart: {e}")
+        import traceback
+        traceback.print_exc()
+        return {}
+
+
+def get_top_attacks_for_weekly_chart(customer_id, end_date, week_end_day, weeks_no):
+    """
+    Get top 5 attacks for each week over the specified number of weeks.
+    Returns data suitable for creating a table under the weekly chart.
+    """
+    try:
+        # Get the weeks to analyze
+        weeks = get_n_weeks_intervals(end_date, weeks_no, week_end_day)
+        
+        # Get all database files that might contain our data
+        project_root = get_project_root()
+        database_dir = os.path.join(project_root, "database_files", customer_id)
+        
+        if not os.path.exists(database_dir):
+            print(f"Database directory not found: {database_dir}")
+            return {}
+        
+        # Collect data from all relevant weeks
+        all_attack_data = {}
+        
+        for week_start, week_end in weeks:
+            # Determine which months we need to check for this week
+            current_date = week_start
+            months_to_check = set()
+            
+            while current_date <= week_end:
+                months_to_check.add((current_date.year, current_date.month))
+                current_date += timedelta(days=1)
+            
+            week_attacks = {}
+            
+            # Query each relevant database
+            for year, month in months_to_check:
+                database_filename = f"database_{customer_id}_{month:02d}_{year}.sqlite"
+                database_path = os.path.join(database_dir, database_filename)
+                
+                if not os.path.exists(database_path):
+                    continue
+                
+                conn = sqlite3.connect(database_path)
+                
+                query = """
+                SELECT name, COUNT(*) as attack_count
+                FROM attacks 
+                WHERE DATE(startDate) BETWEEN ? AND ?
+                GROUP BY name
+                """
+                
+                cursor = conn.cursor()
+                cursor.execute(query, [
+                    week_start.strftime('%Y-%m-%d'),
+                    week_end.strftime('%Y-%m-%d')
+                ])
+                
+                rows = cursor.fetchall()
+                conn.close()
+                
+                for row in rows:
+                    attack_name = row[0]
+                    attack_count = row[1]
+                    week_attacks[attack_name] = week_attacks.get(attack_name, 0) + attack_count
+            
+            # Store this week's data
+            week_key = week_end.strftime('%m/%d/%y')
+            all_attack_data[week_key] = week_attacks
+        
+        # Get top 5 attacks overall across all weeks
+        attack_totals = {}
+        for week_data in all_attack_data.values():
+            for attack, count in week_data.items():
+                attack_totals[attack] = attack_totals.get(attack, 0) + count
+        
+        top_5_attacks = sorted(attack_totals.items(), key=lambda x: x[1], reverse=True)[:5]
+        top_5_attacks = [attack[0] for attack in top_5_attacks]
+        
+        # Create weekly data structure with proper ordering
+        weekly_data = {}
+        for week_start, week_end in weeks:
+            week_key = week_end.strftime('%m/%d/%y')
+            weekly_data[week_key] = {}
+            
+            week_attacks = all_attack_data.get(week_key, {})
+            for attack in top_5_attacks:
+                count = week_attacks.get(attack, 0)
+                weekly_data[week_key][attack] = count
+        
+        return {'attacks': top_5_attacks, 'data': weekly_data}
+        
+    except Exception as e:
+        print(f"Error getting top attacks for weekly chart: {e}")
+        import traceback
+        traceback.print_exc()
+        return {}
+
+
+def generate_attack_table_html(table_data, table_title):
+    """
+    Generate HTML table for attack data.
+    """
+    if not table_data or 'attacks' not in table_data or 'data' not in table_data:
+        return f"<h3>{table_title}</h3><p>No attack data available for table.</p>"
+    
+    attacks = table_data['attacks']
+    data = table_data['data']
+    columns = list(data.keys())
+    
+    html = f"""
+    <div style="margin: 20px 0;">
+        <h3 style="color: #333; margin-bottom: 10px;">{table_title}</h3>
+        <table style="border-collapse: collapse; width: 100%; margin-bottom: 20px; font-family: Arial, sans-serif;">
+            <thead>
+                <tr style="background-color: #007bff; color: white;">
+                    <th style="border: 1px solid #ddd; padding: 12px; text-align: left;">Attack Name</th>
+    """
+    
+    # Add column headers
+    for col in columns:
+        html += f'<th style="border: 1px solid #ddd; padding: 12px; text-align: center;">{col}</th>'
+    
+    html += """
+                    <th style="border: 1px solid #ddd; padding: 12px; text-align: center;">Total</th>
+                </tr>
+            </thead>
+            <tbody>
+    """
+    
+    # Add attack rows
+    for i, attack in enumerate(attacks):
+        # Alternate row colors
+        bg_color = "#f9f9f9" if i % 2 == 0 else "#ffffff"
+        html += f'<tr style="background-color: {bg_color};">'
+        html += f'<td style="border: 1px solid #ddd; padding: 12px; font-weight: bold;">{attack}</td>'
+        
+        row_total = 0
+        for col in columns:
+            count = data[col].get(attack, 0)
+            row_total += count
+            html += f'<td style="border: 1px solid #ddd; padding: 12px; text-align: center;">{count:,}</td>'
+        
+        html += f'<td style="border: 1px solid #ddd; padding: 12px; text-align: center; font-weight: bold;">{row_total:,}</td>'
+        html += '</tr>'
+    
+    html += """
+            </tbody>
+        </table>
+    </div>
+    """
+    
+    return html
+
+
+def generate_all_events_daily_csv(cust_id: str, week_end_day: int = 6, current_date: datetime = None) -> str:
+    """
+    Generate CSV with ALL attack events for the selected week (for testing).
+    """
+    try:
+        if current_date is None:
+            current_date = datetime.now()
+        
+        # Use the existing function to get the correct week range
+        week_start, week_end = get_one_week_behind(current_date, week_end_day)
+        
+        print(f"DEBUG: Generating all events CSV from {week_start.strftime('%Y-%m-%d')} to {week_end.strftime('%Y-%m-%d')}")
+        
+        # Get database file for the month
+        db_month = week_end.strftime("%m")
+        db_year = week_end.strftime("%Y")
+        database_filename = f"database_{cust_id}_{db_month}_{db_year}.sqlite"
+        
+        project_root = get_project_root()
+        database_path = os.path.join(project_root, "database_files", cust_id, database_filename)
+        
+        if not os.path.exists(database_path):
+            print(f"Database file not found: {database_path}")
+            return None
+        
+        conn = sqlite3.connect(database_path)
+        
+        # Get ALL attacks for the week
+        query = """
+        SELECT DATE(startDate) as attack_date, name, COUNT(*) as attack_count
+        FROM attacks 
+        WHERE DATE(startDate) BETWEEN ? AND ?
+        GROUP BY DATE(startDate), name
+        ORDER BY attack_date, attack_count DESC
+        """
+        
+        cursor = conn.cursor()
+        cursor.execute(query, [
+            week_start.strftime('%Y-%m-%d'),
+            week_end.strftime('%Y-%m-%d')
+        ])
+        
+        rows = cursor.fetchall()
+        conn.close()
+        
+        print(f"DEBUG: Found {len(rows)} attack type/date combinations")
+        
+        # Generate CSV filename
+        csv_filename = f"all_events_daily_{week_end.strftime('%Y-%m-%d')}.csv"
+        report_folder = os.path.join(project_root, "report_files", cust_id)
+        os.makedirs(report_folder, exist_ok=True)
+        csv_path = os.path.join(report_folder, csv_filename)
+        
+        # Write CSV
+        with open(csv_path, 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(['Date', 'Day_Name', 'Attack_Name', 'Attack_Count'])
+            
+            for row in rows:
+                attack_date = datetime.strptime(row[0], '%Y-%m-%d')
+                day_name = attack_date.strftime('%A')
+                attack_name = row[1]
+                attack_count = row[2]
+                writer.writerow([row[0], day_name, attack_name, attack_count])
+        
+        print(f"All events daily CSV saved to: {csv_path}")
+        return csv_path
+        
+    except Exception as e:
+        print(f"Error generating all events daily CSV: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def generate_all_events_weekly_csv(cust_id: str, week_end_day: int = 6, weeks_no: int = 6, current_date: datetime = None) -> str:
+    """
+    Generate CSV with ALL attack events for the selected n weeks (for testing).
+    """
+    try:
+        if current_date is None:
+            current_date = datetime.now()
+        
+        # Get the weeks to analyze (use same logic as weekly chart)
+        weeks = get_n_weeks_intervals(current_date, weeks_no, week_end_day)
+        
+        print(f"DEBUG: Generating all events CSV for {weeks_no} weeks")
+        for i, (week_start, week_end) in enumerate(weeks):
+            print(f"DEBUG: Week {i+1}: {week_start.strftime('%Y-%m-%d')} to {week_end.strftime('%Y-%m-%d')}")
+        
+        # Get all database files that might contain our data
+        project_root = get_project_root()
+        database_dir = os.path.join(project_root, "database_files", cust_id)
+        
+        if not os.path.exists(database_dir):
+            print(f"Database directory not found: {database_dir}")
+            return None
+        
+        # Collect data from all weeks
+        all_events = []
+        
+        for week_start, week_end in weeks:
+            # Determine which months we need to check for this week
+            current_date = week_start
+            months_to_check = set()
+            
+            while current_date <= week_end:
+                months_to_check.add((current_date.year, current_date.month))
+                current_date += timedelta(days=1)
+            
+            # Query each relevant database
+            for year, month in months_to_check:
+                database_filename = f"database_{cust_id}_{month:02d}_{year}.sqlite"
+                database_path = os.path.join(database_dir, database_filename)
+                
+                if not os.path.exists(database_path):
+                    continue
+                
+                conn = sqlite3.connect(database_path)
+                
+                query = """
+                SELECT DATE(startDate) as attack_date, name, COUNT(*) as attack_count
+                FROM attacks 
+                WHERE DATE(startDate) BETWEEN ? AND ?
+                GROUP BY DATE(startDate), name
+                ORDER BY attack_date, attack_count DESC
+                """
+                
+                cursor = conn.cursor()
+                cursor.execute(query, [
+                    week_start.strftime('%Y-%m-%d'),
+                    week_end.strftime('%Y-%m-%d')
+                ])
+                
+                rows = cursor.fetchall()
+                conn.close()
+                
+                for row in rows:
+                    attack_date = datetime.strptime(row[0], '%Y-%m-%d')
+                    week_end_for_this_date = week_end.strftime('%Y-%m-%d')
+                    all_events.append([
+                        row[0],  # attack_date
+                        week_end_for_this_date,  # week_end
+                        row[1],  # attack_name
+                        row[2]   # attack_count
+                    ])
+        
+        print(f"DEBUG: Found {len(all_events)} total attack type/date combinations across all weeks")
+        
+        # Generate CSV filename (use the most recent week end date)
+        latest_week_end = max(weeks, key=lambda x: x[1])[1]
+        csv_filename = f"all_events_weekly_{latest_week_end.strftime('%Y-%m-%d')}.csv"
+        report_folder = os.path.join(project_root, "report_files", cust_id)
+        os.makedirs(report_folder, exist_ok=True)
+        csv_path = os.path.join(report_folder, csv_filename)
+        
+        # Write CSV
+        with open(csv_path, 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(['Date', 'Week_End', 'Attack_Name', 'Attack_Count'])
+            
+            for event in all_events:
+                writer.writerow(event)
+        
+        print(f"All events weekly CSV saved to: {csv_path}")
+        return csv_path
+        
+    except Exception as e:
+        print(f"Error generating all events weekly CSV: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
 def generate_daily_attacks_csv(cust_id: str, week_end_day: int = 6, current_date: datetime = None) -> tuple[str, int]:
     """
     Generate daily attack data for the past week and save to CSV.
@@ -480,9 +906,9 @@ def generate_daily_attacks_csv(cust_id: str, week_end_day: int = 6, current_date
     return csv_filename, total_attacks
 
 
-def generate_combined_html_chart(cust_id: str, daily_csv_filename: str, weekly_csv_filename: str = None, html_filename: str = None) -> str:
+def generate_combined_html_chart(cust_id: str, daily_csv_filename: str, weekly_csv_filename: str = None, html_filename: str = None, current_date: datetime = None, week_end_day: int = 6) -> str:
     """
-    Generate HTML with both daily and weekly Google Charts.
+    Generate HTML with both daily and weekly Google Charts plus attack tables.
     Daily chart appears first, followed by weekly chart.
     
     Args:
@@ -492,7 +918,7 @@ def generate_combined_html_chart(cust_id: str, daily_csv_filename: str, weekly_c
         html_filename: Optional HTML filename, defaults to weekly_trends_chart_{date}.html
         
     Returns:
-        HTML content with both charts
+        HTML content with both charts and tables
     """
     project_root = get_project_root()
     
@@ -527,6 +953,19 @@ def generate_combined_html_chart(cust_id: str, daily_csv_filename: str, weekly_c
                 week_end = datetime.strptime(row['week_end'], '%Y-%m-%d')
                 attacks_count = int(row['attacks_count'])
                 weekly_chart_data.append((week_end, attacks_count))
+
+    # Get attack table data using the same parameters used for generation
+    if current_date is None:
+        current_date = datetime.now()
+    
+    weeks_no = len(weekly_chart_data) if weekly_chart_data else 6
+    
+    daily_table_data = get_top_attacks_for_daily_chart(cust_id, current_date, week_end_day)
+    weekly_table_data = get_top_attacks_for_weekly_chart(cust_id, current_date, week_end_day, weeks_no)
+    
+    # Generate table HTML
+    daily_table_html = generate_attack_table_html(daily_table_data, "Top 5 Attacks - Daily Breakdown")
+    weekly_table_html = generate_attack_table_html(weekly_table_data, "Top 5 Attacks - Weekly Trends")
     
     # Sort data by date
     daily_chart_data.sort(key=lambda x: x[0])
@@ -548,12 +987,43 @@ def generate_combined_html_chart(cust_id: str, daily_csv_filename: str, weekly_c
     daily_js_data = ",\n          ".join(daily_js_data_rows)
     weekly_js_data = ",\n          ".join(weekly_js_data_rows)
     
-    # HTML template with both charts
+    # HTML template with both charts and tables
     html_content = f"""<!DOCTYPE html>
 <html>
 <head>
-    <title>Attack Trends Report</title>
+    <title>Attack Trends Report - {cust_id}</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
+    <style>
+        body {{
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }}
+        .container {{
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }}
+        .chart-container {{
+            margin: 20px 0;
+            text-align: center;
+        }}
+        h1 {{
+            color: #333;
+            text-align: center;
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 10px;
+        }}
+        h2 {{
+            color: #007bff;
+            margin-top: 30px;
+        }}
+    </style>
     <script type="text/javascript">
       google.charts.load('current', {{'packages':['corechart']}});
       google.charts.setOnLoadCallback(drawCharts);
@@ -596,14 +1066,14 @@ def generate_combined_html_chart(cust_id: str, daily_csv_filename: str, weekly_c
           legend: {{
             position: 'none'
           }},
-          backgroundColor: '#f8f9fa',
+          backgroundColor: 'transparent',
           chartArea: {{
             left: 80,
             top: 80,
             width: '75%',
             height: '70%'
           }},
-          colors: ['#3366cc'],
+          colors: ['#007bff'],
           bar: {{
             groupWidth: '60%'
           }},
@@ -612,10 +1082,10 @@ def generate_combined_html_chart(cust_id: str, daily_csv_filename: str, weekly_c
             textStyle: {{
               fontSize: 12,
               bold: true,
-              color: '#3366cc'
+              color: '#333333'
             }},
             stem: {{
-              color: '#3366cc',
+              color: '#007bff',
               length: 8
             }}
           }}
@@ -658,14 +1128,14 @@ def generate_combined_html_chart(cust_id: str, daily_csv_filename: str, weekly_c
           legend: {{
             position: 'none'
           }},
-          backgroundColor: '#f8f9fa',
+          backgroundColor: 'transparent',
           chartArea: {{
             left: 80,
             top: 80,
             width: '75%',
             height: '70%'
           }},
-          colors: ['#3366cc'],
+          colors: ['#007bff'],
           bar: {{
             groupWidth: '60%'
           }},
@@ -674,10 +1144,10 @@ def generate_combined_html_chart(cust_id: str, daily_csv_filename: str, weekly_c
             textStyle: {{
               fontSize: 12,
               bold: true,
-              color: '#3366cc'
+              color: '#333333'
             }},
             stem: {{
-              color: '#3366cc',
+              color: '#007bff',
               length: 8
             }}
           }}
@@ -689,16 +1159,32 @@ def generate_combined_html_chart(cust_id: str, daily_csv_filename: str, weekly_c
     </script>
 </head>
 <body>
-    <div style="text-align: center; margin: 20px;">
-        <div id="daily_chart" style="width: 100%; height: 500px; margin-bottom: 30px;"></div>
-        <div id="weekly_chart" style="width: 100%; height: 500px;"></div>
+    <div class="container">
+        <h1>Weekly Attack Trends Report - {cust_id}</h1>
+        <p style="text-align: center; color: #666; font-size: 14px;">
+            Report generated on {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
+        </p>
+        
+        <h2>Daily Attack Analysis - Past Week</h2>
+        <div class="chart-container">
+            <div id="daily_chart" style="width: 100%; height: 500px;"></div>
+        </div>
+        
+        {daily_table_html}
+        
+        <h2>Weekly Attack Trends</h2>
+        <div class="chart-container">
+            <div id="weekly_chart" style="width: 100%; height: 500px;"></div>
+        </div>
+        
+        {weekly_table_html}
     </div>
 </body>
 </html>"""
     
     # Save HTML file
     html_path = os.path.join(project_root, "report_files", cust_id, html_filename)
-    with open(html_path, 'w') as htmlfile:
+    with open(html_path, 'w', encoding='utf-8') as htmlfile:
         htmlfile.write(html_content)
     
     print(f"Combined Chart HTML saved to: {html_path}")
@@ -806,6 +1292,11 @@ def generate_weekly_reports(cust_id: str, week_end_day: int, weeks_no: int, curr
         # Generate daily attacks CSV for the past week
         daily_csv_filename, daily_total_attacks = generate_daily_attacks_csv(cust_id, week_end_day, current_date)
         
+        # Generate testing CSV files with ALL events
+        print("Generating testing CSV files...")
+        all_events_daily_csv = generate_all_events_daily_csv(cust_id, week_end_day, current_date)
+        all_events_weekly_csv = generate_all_events_weekly_csv(cust_id, week_end_day, weeks_no, current_date)
+        
         # SANITY CHECK: Compare daily total with weekly total
         print()
         print("SANITY CHECK:")
@@ -824,7 +1315,7 @@ def generate_weekly_reports(cust_id: str, week_end_day: int, weeks_no: int, curr
         print()
         print("Generating combined HTML chart with daily and weekly data...")
         combined_html_filename = f"weekly_trends_chart_{week_end_str}.html"
-        generate_combined_html_chart(cust_id, daily_csv_filename, csv_filename, combined_html_filename)
+        generate_combined_html_chart(cust_id, daily_csv_filename, csv_filename, combined_html_filename, current_date, week_end_day)
         
         print()
         print("=" * 50)
